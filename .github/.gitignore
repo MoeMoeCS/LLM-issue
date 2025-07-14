@@ -1,0 +1,75 @@
+# Python  
+__pycache__/  
+*.py[cod]  
+*$py.class  
+*.so  
+.Python  
+build/  
+develop-eggs/  
+dist/  
+downloads/  
+eggs/  
+.eggs/  
+lib/  
+lib64/  
+parts/  
+sdist/  
+var/  
+wheels/  
+*.egg-info/  
+.installed.cfg  
+*.egg  
+MANIFEST  
+  
+# 虚拟环境  
+venv/  
+env/  
+ENV/  
+env.bak/  
+venv.bak/  
+.venv/  
+  
+# 环境变量和配置  
+.env  
+.env.local  
+.env.*.local  
+  
+# 项目输出文件  
+output/  
+*.md  
+*.json  
+  
+# 日志文件  
+*.log  
+logs/  
+  
+# IDE/编辑器  
+.vscode/  
+.idea/  
+*.swp  
+*.swo  
+*~  
+  
+# 操作系统  
+.DS_Store  
+.DS_Store?  
+._*  
+.Spotlight-V100  
+.Trashes  
+ehthumbs.db  
+Thumbs.db  
+  
+# 测试覆盖率  
+htmlcov/  
+.coverage  
+.coverage.*  
+coverage.xml  
+*.cover  
+.hypothesis/  
+.pytest_cache/  
+  
+# 缓存  
+.cache/  
+.mypy_cache/  
+.dmypy.json  
+dmypy.json
