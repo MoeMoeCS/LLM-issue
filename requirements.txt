@@ -1,6 +1,7 @@
-rich>=13.0.0
-httpx[http2]>=0.27
-pydantic>=2.0
-typer>=0.9
-python-dotenv>=1.0
-pytest>=7        # 仅测试用
+httpx
+openai
+typer
+pydantic
+rich
+pytest
+pytest-cov

@@ -32,7 +32,7 @@ TYPE_STRINGS = {
     "Security": [r"\bsecurity\b"],
     "Question": [r"\bquestion\b", r"\bhow to\b"],
 }
-TYPE_PATTERNS = {k: [re.compile(p, re.I) for p in lst] for k, lst in TYPE_STRINGS.items()}
+TYPE_PATTERNS = TYPE_STRINGS  # 只保留字符串，不提前编译
 
 # ---------- 优先级关键词 ----------
 PRIORITY_STRINGS = {
@@ -40,7 +40,7 @@ PRIORITY_STRINGS = {
     "P1": ["priority/major", "major"],
     "P2": ["priority/minor", "minor"],
 }
-PRIORITY_RULES = {k: [re.compile(p, re.I) for p in lst] for k, lst in PRIORITY_STRINGS.items()}
+PRIORITY_RULES = PRIORITY_STRINGS  # 只保留字符串，不提前编译
 
 # ---------- LLM 配置 ----------
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")

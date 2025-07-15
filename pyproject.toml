@@ -1,0 +1,9 @@
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["github_issue_summarizer", "llm_summary", "utils"] 

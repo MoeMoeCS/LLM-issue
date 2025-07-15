@@ -1,9 +1,12 @@
+[//]: # (中文说明)
+
+[English README (英文版)](README.md)
+
 # GitHub Issue 速览器
 
 一个用于抓取、筛选并自动摘要 GitHub Issue 的命令行工具，支持大模型（如 OpenAI）自动生成一句话摘要。
 
 ## 功能特点
-
 - 支持抓取任意仓库的 open issues
 - 自动过滤已分配、已关闭或无效的 issue
 - 按类型和优先级自动分类
@@ -11,43 +14,43 @@
 - 输出 Markdown 表格和项目总览摘要
 
 ## 安装
-
 ```bash
 git clone https://github.com/你的用户名/issue-summarizer.git
 cd issue-summarizer
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ## 用法
-
 ### 1. 设置 GitHub Token 和 OpenAI API Key
-
 ```bash
 export GH_TOKEN=你的_github_token
 export OPENAI_API_KEY=你的_openai_key
 ```
-
 ### 2. 运行速览器
-
 ```bash
 python github_issue_summarizer.py owner/repo
 ```
-
 - 将 `owner/repo` 替换为目标仓库名，如 `python/cpython`
 
-## 配置
+### 3. 输出
+- 工具会在终端输出速览表格，并将结果保存到 `output/` 目录。
 
-- 可通过 `config.py` 自定义关键词、标签和大模型参数
+## 配置
+- 可通过 `config.py` 自定义关键词、标签和大模型参数。
 
 ## 依赖
-
 - Python 3.8+
 - httpx
 - typer
 - pydantic
 - rich
 - openai
+- pytest, pytest-cov, pytest-asyncio（用于测试）
+
+## 贡献
+欢迎提交 PR！如有重大更改，请先提 issue 讨论。
 
 ## 许可证
-
 Apache License 2.0 
