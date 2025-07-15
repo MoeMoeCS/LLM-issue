@@ -29,6 +29,7 @@ from config import (
 )
 from llm_summary import summarize_batch
 from utils import setup_logger
+from cache import get_cache, set_cache
 
 logger = setup_logger()
 
@@ -114,6 +115,13 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
     issues: List[Issue] = []
     page = 1
 
+    # 生成缓存键
+    cache_key = f"github_issues:{repo}:{token or 'no_token'}"
+    cached_data = get_cache(cache_key)
+    if cached_data:
+        logger.info("Using cached issues data")
+        return [Issue(**issue_dict) for issue_dict in cached_data]
+
     async with httpx.AsyncClient(
         http2=True,
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
@@ -187,6 +195,12 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
                 progress.update(task, advance=PER_PAGE)
 
     logger.info("Fetched %d issues after filtering", len(issues))
+    
+    # 缓存结果，设置 5 分钟过期时间
+    # 由于 Issue 是 Pydantic 模型，需要先转换为字典
+    issues_data = [issue.model_dump(mode="json") for issue in issues]
+    set_cache(cache_key, issues_data, expire_in=300)
+    
     return issues
 
 
