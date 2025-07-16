@@ -2,13 +2,27 @@
 缓存系统模块，支持内存缓存和持久化存储
 """
 import json
+import logging
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from utils import setup_logger
+# ------------- logger -------------
+def setup_logger(name: str = "summarizer") -> logging.Logger:
+    """返回已配置好的 logger 实例（带控制台 handler）"""
+    logger = logging.getLogger(name)
+    if logger.hasHandlers():
+        return logger
+
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    fmt = "[%(asctime)s] %(levelname)s - %(message)s"
+    handler.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
+    logger.addHandler(handler)
+    return logger
 
 logger = setup_logger(__name__)
 
@@ -35,9 +49,9 @@ class Cache:
         self._last_cleanup = time.time()
         
         # 确保缓存目录存在
-        db_path = Path(db_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db_path = str(db_path)
+        path = Path(db_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path = str(path)
         
         # 初始化数据库
         self._init_db()
@@ -178,4 +192,34 @@ class Cache:
         self._memory_cache.clear()
         with self._get_db() as (conn, cur):
             cur.execute("DELETE FROM cache")
-            conn.commit() 
+            conn.commit()
+
+# ------------- 缓存实例 -------------
+_cache = Cache(
+    db_path=os.getenv("CACHE_DB_PATH", ".cache/cache.db"),
+    max_memory_items=int(os.getenv("CACHE_MAX_MEMORY_ITEMS", "1000")),
+    cleanup_interval=int(os.getenv("CACHE_CLEANUP_INTERVAL", "3600")),
+)
+
+def get_cache(key: str) -> Any | None:
+    """根据 key 读取缓存值，不存在返回 None"""
+    return _cache.get(key)
+
+def set_cache(key: str, value: Any, expire_in: int = 86400) -> None:
+    """
+    将 key-value 写入缓存
+    
+    Args:
+        key: 缓存键
+        value: 要缓存的值
+        expire_in: 过期时间（秒），默认1天
+    """
+    _cache.set(key, value, expire_in)
+
+def delete_cache(key: str) -> None:
+    """删除指定的缓存项"""
+    _cache.delete(key)
+
+def clear_cache() -> None:
+    """清空所有缓存"""
+    _cache.clear() 

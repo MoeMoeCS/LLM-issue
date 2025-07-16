@@ -32,7 +32,7 @@ TYPE_STRINGS = {
     "Security": [r"\bsecurity\b"],
     "Question": [r"\bquestion\b", r"\bhow to\b"],
 }
-TYPE_PATTERNS = {k: [re.compile(p, re.I) for p in lst] for k, lst in TYPE_STRINGS.items()}
+TYPE_PATTERNS = TYPE_STRINGS
 
 # ---------- 优先级关键词 ----------
 PRIORITY_STRINGS = {
@@ -40,12 +40,12 @@ PRIORITY_STRINGS = {
     "P1": ["priority/major", "major"],
     "P2": ["priority/minor", "minor"],
 }
-PRIORITY_RULES = {k: [re.compile(p, re.I) for p in lst] for k, lst in PRIORITY_STRINGS.items()}
+PRIORITY_RULES = PRIORITY_STRINGS
 
 # ---------- LLM 配置 ----------
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
 SUMMARY_PROMPT = """你是一个专业的 GitHub Issue 分析助手。请根据以下 Issue 的信息生成一句话摘要。
 
 要求：
