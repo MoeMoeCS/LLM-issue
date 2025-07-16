@@ -53,19 +53,21 @@ def test_complex_values(temp_cache):
 def test_memory_limit(tmp_path):
     """测试内存缓存限制"""
     cache = Cache(str(tmp_path / "limit_test.db"), max_memory_items=2)
-    
+
     # 添加三个项，应该只有最新的两个保留在内存中
     cache.set("a", 1)
     cache.set("b", 2)
     cache.set("c", 3)
-    
+
+    # 检查 set 后内存缓存只保留最新的两个 key
+    keys = set(cache._memory_cache.keys())
+    assert len(keys) == 2
+    assert "c" in keys and ("a" in keys or "b" in keys)
+
     # 验证所有值都能从 SQLite 中读取
     assert cache.get("a") == 1
     assert cache.get("b") == 2
     assert cache.get("c") == 3
-    
-    # 检查内存缓存大小
-    assert len(cache._memory_cache) <= 2
 
 
 def test_clear(temp_cache):

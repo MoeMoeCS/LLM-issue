@@ -9,6 +9,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
+from collections import OrderedDict
 
 # ------------- logger -------------
 def setup_logger(name: str = "summarizer") -> logging.Logger:
@@ -43,7 +44,7 @@ class Cache:
         max_memory_items: int = 1000,
         cleanup_interval: int = 3600,  # 1小时清理一次过期数据
     ):
-        self._memory_cache: dict[str, tuple[Any, float]] = {}  # (value, expire_time)
+        self._memory_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()  # (value, expire_time)
         self._max_memory_items = max_memory_items
         self._cleanup_interval = cleanup_interval
         self._last_cleanup = time.time()
@@ -153,16 +154,11 @@ class Cache:
         """
         expire_time = time.time() + expire_in
         
-        # 写入内存缓存
+        # 写入内存缓存（保持插入顺序，FIFO 淘汰）
         self._memory_cache[key] = (value, expire_time)
-        
-        # 如果内存缓存超出限制，移除最早的项
+        self._memory_cache.move_to_end(key)
         if len(self._memory_cache) > self._max_memory_items:
-            oldest_key = min(
-                self._memory_cache.keys(),
-                key=lambda k: self._memory_cache[k][1]
-            )
-            del self._memory_cache[oldest_key]
+            self._memory_cache.popitem(last=False)
         
         # 写入数据库缓存
         with self._get_db() as (conn, cur):
