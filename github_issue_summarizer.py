@@ -50,31 +50,22 @@ class Issue(BaseModel):
     priority: str = ""
 
 
-# ---------- 正则预编译 ----------
-TYPE_PATTERNS_COMPILED = {
-    k: [re.compile(p, re.I) for p in lst] for k, lst in TYPE_PATTERNS.items()
-}
-PRIORITY_RULES_COMPILED = {
-    k: [re.compile(p, re.I) for p in lst] for k, lst in PRIORITY_RULES.items()
-}
-
-
 # ---------- 分类与过滤 ----------
 def classify_issue(issue: Issue) -> Issue:
     """根据标题和正文推断 issue 的类型与优先级"""
     text = f"{issue.title} {issue.body or ''}".lower()
 
     # 类型
-    for issue_type, patterns in TYPE_PATTERNS_COMPILED.items():
-        if any(p.search(text) for p in patterns):
+    for issue_type, patterns in TYPE_PATTERNS.items():
+        if any(re.search(p, text, re.I) for p in patterns):
             issue.type_ = issue_type
             break
     else:
         issue.type_ = "Other"
 
     # 优先级
-    for prio, patterns in PRIORITY_RULES_COMPILED.items():
-        if any(p.search(text) for p in patterns):
+    for prio, patterns in PRIORITY_RULES.items():
+        if any(re.search(p, text, re.I) for p in patterns):
             issue.priority = prio
             break
         # 额外检查 label 里是否直接包含字符串

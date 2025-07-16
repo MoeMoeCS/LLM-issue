@@ -4,3 +4,4 @@ pydantic>=2.0
 typer>=0.9
 python-dotenv>=1.0
 pytest>=7        # 仅测试用
+openai>=1.0.0    # LLM API
