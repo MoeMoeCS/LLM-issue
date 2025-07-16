@@ -49,6 +49,31 @@ class Issue(BaseModel):
     type_: str = ""
     priority: str = ""
 
+    def to_dict(self) -> dict:
+        """兼容不同版本的Pydantic，将Issue对象转换为字典"""
+        try:
+            # 尝试使用 v2 方法
+            return self.model_dump(mode="json")
+        except AttributeError:
+            try:
+                # 尝试使用 v1 方法
+                return self.dict()
+            except AttributeError:
+                # 如果都失败，手动转换
+                return {
+                    "number": self.number,
+                    "title": self.title,
+                    "body": self.body,
+                    "labels": self.labels,
+                    "assignees": self.assignees,
+                    "state": self.state,
+                    "created_at": self.created_at.isoformat(),
+                    "updated_at": self.updated_at.isoformat(),
+                    "html_url": self.html_url,
+                    "type_": self.type_,
+                    "priority": self.priority,
+                }
+
 
 # ---------- 分类与过滤 ----------
 def classify_issue(issue: Issue) -> Issue:
@@ -114,7 +139,6 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
         return [Issue(**issue_dict) for issue_dict in cached_data]
 
     async with httpx.AsyncClient(
-        http2=True,
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         timeout=30,
     ) as client:
@@ -189,7 +213,7 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
     
     # 缓存结果，设置 5 分钟过期时间
     # 由于 Issue 是 Pydantic 模型，需要先转换为字典
-    issues_data = [issue.model_dump(mode="json") for issue in issues]
+    issues_data = [issue.to_dict() for issue in issues]
     set_cache(cache_key, issues_data, expire_in=300)
     
     return issues

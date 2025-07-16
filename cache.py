@@ -192,7 +192,7 @@ class Cache:
         self._memory_cache.clear()
         with self._get_db() as (conn, cur):
             cur.execute("DELETE FROM cache")
-            conn.commit()
+            conn.commit() 
 
 # ------------- 缓存实例 -------------
 _cache = Cache(
