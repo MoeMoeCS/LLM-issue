@@ -11,7 +11,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 import httpx
 import typer
@@ -27,11 +27,18 @@ from config import (
     PRIORITY_STRINGS,
     TYPE_PATTERNS,
 )
+from exceptions import GitHubError, RateLimitError, RepoNotFoundError, TokenError, NetworkError
 from llm_summary import summarize_batch
 from utils import setup_logger
 from cache import get_cache, set_cache
 
 logger = setup_logger()
+
+# ---------- 常量 ----------
+GITHUB_API = "https://api.github.com"
+PER_PAGE = 100
+MAX_ITEMS = 10_000
+MAX_RETRIES = 3  # 最大重试次数
 
 # ---------- 数据模型 ----------
 class Issue(BaseModel):
@@ -116,11 +123,34 @@ def should_include(issue: Issue) -> bool:
     return True
 
 
-# ---------- 抓取 ----------
-GITHUB_API = "https://api.github.com"
-PER_PAGE = 100
-MAX_ITEMS = 10_000
-
+# ---------- GitHub API 相关 ----------
+async def _handle_github_response(
+    r: httpx.Response,
+    repo: str,
+) -> Tuple[bool, Optional[List[dict]]]:
+    """处理 GitHub API 响应，返回 (是否继续, 数据)"""
+    if r.status_code == 404:
+        raise RepoNotFoundError(f"Repository {repo} not found")
+    
+    if r.status_code == 403:
+        # 检查是否是 rate limit
+        if "rate limit exceeded" in r.text.lower():
+            reset_ts = int(r.headers.get("x-ratelimit-reset", 0))
+            raise RateLimitError(reset_ts)
+        # 其他 403 错误（如 token 无效）
+        raise TokenError(f"Token error or permission denied: {r.text}")
+    
+    if r.status_code == 422:
+        logger.info("No more issues (422), stopping.")
+        return False, None
+    
+    # 其他错误
+    r.raise_for_status()
+    data = r.json()
+    if not data:
+        return False, None
+    
+    return True, data
 
 async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
     """抓取指定仓库的 open issues，自动停于 GitHub 上限"""
@@ -149,70 +179,83 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
             console=Console(stderr=True),
         ) as progress:
             task = progress.add_task("Fetching issues...", total=None)
+            
             while len(issues) < MAX_ITEMS:
-                r = await client.get(
-                    f"{GITHUB_API}/repos/{repo}/issues",
-                    headers=headers,
-                    params={
-                        "state": "open",
-                        "sort": "updated",
-                        "direction": "desc",
-                        "per_page": PER_PAGE,
-                        "page": page,
-                    },
-                )
-
-                if r.status_code == 404:
-                    logger.error("Repository not found")
-                    sys.exit(1)
-                if r.status_code == 422:
-                    logger.info("No more issues (422), stopping.")
-                    break
-                if r.status_code == 403:
-                    logger.error("Rate limit or token error: %s", r.text)
-                    sys.exit(1)
-                r.raise_for_status()
-
-                data = r.json()
-                if not data:
-                    break
-
-                for item in data:
-                    if "pull_request" in item:
-                        continue
-                    issue = Issue(
-                        number=item["number"],
-                        title=item["title"],
-                        body=item.get("body") or "",
-                        labels=[l["name"] for l in item["labels"]],
-                        assignees=[a["login"] for a in item["assignees"]],
-                        state=item["state"],
-                        created_at=datetime.fromisoformat(
-                            item["created_at"].replace("Z", "+00:00")
-                        ),
-                        updated_at=datetime.fromisoformat(
-                            item["updated_at"].replace("Z", "+00:00")
-                        ),
-                        html_url=item["html_url"],
-                    )
-                    issue = classify_issue(issue)
-                    if should_include(issue):
-                        issues.append(issue)
-
-                remain = int(r.headers.get("x-ratelimit-remaining", 1))
-                reset_ts = int(r.headers.get("x-ratelimit-reset", 0))
-                if remain < 10 and reset_ts:
-                    wait = max(reset_ts - int(datetime.now().timestamp()), 0) + 1
-                    logger.warning("Rate limit low, sleeping %ds", wait)
-                    await asyncio.sleep(wait)
-
-                page += 1
-                progress.update(task, advance=PER_PAGE)
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        r = await client.get(
+                            f"{GITHUB_API}/repos/{repo}/issues",
+                            headers=headers,
+                            params={
+                                "state": "open",
+                                "sort": "updated",
+                                "direction": "desc",
+                                "per_page": PER_PAGE,
+                                "page": page,
+                            },
+                        )
+                        
+                        should_continue, data = await _handle_github_response(r, repo)
+                        if not should_continue:
+                            break
+                        
+                        for item in data:
+                            if "pull_request" in item:
+                                continue
+                            issue = Issue(
+                                number=item["number"],
+                                title=item["title"],
+                                body=item.get("body") or "",
+                                labels=[l["name"] for l in item["labels"]],
+                                assignees=[a["login"] for a in item["assignees"]],
+                                state=item["state"],
+                                created_at=datetime.fromisoformat(
+                                    item["created_at"].replace("Z", "+00:00")
+                                ),
+                                updated_at=datetime.fromisoformat(
+                                    item["updated_at"].replace("Z", "+00:00")
+                                ),
+                                html_url=item["html_url"],
+                            )
+                            issue = classify_issue(issue)
+                            if should_include(issue):
+                                issues.append(issue)
+                        
+                        # 检查是否需要限流
+                        remain = int(r.headers.get("x-ratelimit-remaining", 1))
+                        reset_ts = int(r.headers.get("x-ratelimit-reset", 0))
+                        if remain < 10 and reset_ts:
+                            wait = max(reset_ts - int(datetime.now().timestamp()), 0) + 1
+                            logger.warning("Rate limit low (%d remaining), sleeping %ds", remain, wait)
+                            await asyncio.sleep(wait)
+                        
+                        page += 1
+                        progress.update(task, advance=PER_PAGE)
+                        break  # 成功获取数据，跳出重试循环
+                        
+                    except RateLimitError as e:
+                        if attempt == MAX_RETRIES - 1:
+                            logger.error("Rate limit exceeded and max retries reached")
+                            raise
+                        wait = max(e.reset_time - int(datetime.now().timestamp()), 0) + 1
+                        logger.warning("Rate limit exceeded, sleeping %ds (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                        await asyncio.sleep(wait)
+                        
+                    except (httpx.RequestError, httpx.HTTPError) as e:
+                        if attempt == MAX_RETRIES - 1:
+                            logger.error("Network error after %d retries: %s", MAX_RETRIES, e)
+                            raise NetworkError(f"Failed to fetch issues: {e}")
+                        wait = 2 ** attempt  # 指数退避
+                        logger.warning("Network error, retrying in %ds (attempt %d/%d): %s", wait, attempt + 1, MAX_RETRIES, e)
+                        await asyncio.sleep(wait)
+                else:
+                    # 所有重试都失败
+                    logger.error("Failed to fetch issues after %d retries", MAX_RETRIES)
+                    raise NetworkError("Failed to fetch issues after all retries")
 
     logger.info("Fetched %d issues after filtering", len(issues))
     
     # 缓存结果，设置 5 分钟过期时间
-    # 由于 Issue 是 Pydantic 模型，需要先转换为字典
     issues_data = [issue.to_dict() for issue in issues]
     set_cache(cache_key, issues_data, expire_in=300)
     
@@ -294,11 +337,40 @@ def main(
 
 async def run(repo: str, token: str | None) -> None:
     """异步主流程"""
-    issues = await fetch_issues(repo, token)
-    oneliner, md_table = await build_summary_async(issues, repo)
-    save_outputs(repo, oneliner, md_table, issues)
-    typer.echo("✅ 完成，结果已保存至 output/")
-
+    console = Console()
+    
+    try:
+        with console.status("[bold green]正在抓取 Issues...") as status:
+            issues = await fetch_issues(repo, token)
+            if not issues:
+                console.print("[yellow]⚠️ 未找到任何符合条件的 Issue[/]")
+                return
+            
+            status.update("[bold green]正在生成摘要...")
+            oneliner, md_table = await build_summary_async(issues, repo)
+            
+            status.update("[bold green]正在保存结果...")
+            save_outputs(repo, oneliner, md_table, issues)
+            
+            console.print("[green]✅ 完成！结果已保存至 output/ 目录[/]")
+            
+    except RepoNotFoundError:
+        console.print(f"[red]❌ 仓库 {repo} 不存在或无法访问[/]")
+        sys.exit(1)
+    except TokenError as e:
+        console.print(f"[red]❌ Token 无效或权限不足: {e}[/]")
+        sys.exit(1)
+    except RateLimitError as e:
+        reset_time = datetime.fromtimestamp(e.reset_time).strftime("%H:%M:%S")
+        console.print(f"[red]❌ GitHub API 速率限制，将在 {reset_time} 重置[/]")
+        sys.exit(1)
+    except NetworkError as e:
+        console.print(f"[red]❌ 网络错误: {e}[/]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]❌ 未知错误: {e}[/]")
+        logger.exception("Unexpected error")
+        sys.exit(1)
 
 if __name__ == "__main__":
     app()

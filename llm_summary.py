@@ -5,10 +5,14 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
+from pathlib import Path
 from textwrap import shorten
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.console import Console
 
 from cache import Cache
 from config import (
@@ -24,23 +28,23 @@ logger = logging.getLogger(__name__)
 # 自定义异常类
 class LLMSummaryError(Exception):
     """LLM 摘要生成相关的异常基类"""
-
+    pass
 
 class LLMAPIError(LLMSummaryError):
     """LLM API 调用异常"""
-
+    pass
 
 class LLMTimeoutError(LLMSummaryError):
     """LLM API 超时异常"""
-
+    pass
 
 class LLMRateLimitError(LLMSummaryError):
     """LLM API 速率限制异常"""
-
+    pass
 
 class LLMQualityError(LLMSummaryError):
     """摘要质量不符合要求"""
-
+    pass
 
 # 配置项
 DEFAULT_CONCURRENCY = "10"
@@ -59,6 +63,30 @@ SUMMARY_CHECKS = {
     "length": re.compile(r"^[「『](.{5,30})[」』]$"),  # 检查长度和引号
     "style": re.compile(r"[「『][^」』]+[」』]$"),  # 检查格式一致性
 }
+
+# 记录降级原因
+class DegradationReason:
+    def __init__(self):
+        self.reasons: Dict[int, str] = {}  # issue_number -> reason
+        
+    def add(self, issue_number: int, reason: str) -> None:
+        self.reasons[issue_number] = reason
+        
+    def get_summary(self) -> str:
+        if not self.reasons:
+            return ""
+        
+        total = len(self.reasons)
+        by_reason = {}
+        for reason in self.reasons.values():
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+            
+        lines = [f"共有 {total} 个 Issue 使用了本地降级摘要:"]
+        for reason, count in by_reason.items():
+            lines.append(f"- {reason}: {count} 个")
+        return "\n".join(lines)
+
+degradation_tracker = DegradationReason()
 
 
 def _get_cache_key(issue) -> str:
@@ -135,6 +163,7 @@ async def summarize_batch(
         return results
 
     semaphore = asyncio.Semaphore(concurrency_limit)
+    console = Console()
 
     async def _summarize_single_issue(issue):
         """为单个 issue 生成摘要"""
@@ -174,7 +203,8 @@ async def summarize_batch(
                             issue.number, quality_error
                         )
                         if attempt == max_retries - 1:
-                            raise LLMQualityError(quality_error)
+                            degradation_tracker.add(issue.number, f"质量检查失败：{quality_error}")
+                            break
                         continue
                     
                     logger.debug(
@@ -185,27 +215,41 @@ async def summarize_batch(
                     cache.set(cache_key, summary, expire_in=CACHE_EXPIRE)
                     return summary
 
-                except (APITimeoutError, RateLimitError, APIError, Exception) as e:
-                    error_type = (
-                        "timeout" if isinstance(e, APITimeoutError)
-                        else "rate_limit" if isinstance(e, RateLimitError)
-                        else "api" if isinstance(e, APIError)
-                        else "unknown"
-                    )
-                    
-                    logger.warning(
-                        "%s error for issue #%s, attempt %d/%d: %s",
-                        error_type.title(), issue.number, attempt + 1, max_retries, e
-                    )
-                    
+                except APITimeoutError:
                     if attempt == max_retries - 1:
-                        logger.error(
-                            "All retries failed for issue #%s", issue.number
-                        )
+                        logger.error("API timeout for issue #%s after all retries", issue.number)
+                        degradation_tracker.add(issue.number, "API 超时")
                         break
+                    wait = 2 ** attempt
+                    logger.warning("API timeout, retrying in %ds (attempt %d/%d)", wait, attempt + 1, max_retries)
+                    await asyncio.sleep(wait)
                     
-                    delay = await _get_retry_delay(error_type, attempt)
-                    await asyncio.sleep(delay)
+                except RateLimitError:
+                    if attempt == max_retries - 1:
+                        logger.error("Rate limit for issue #%s after all retries", issue.number)
+                        degradation_tracker.add(issue.number, "API 速率限制")
+                        break
+                    wait = 5 * (attempt + 1)
+                    logger.warning("Rate limit, retrying in %ds (attempt %d/%d)", wait, attempt + 1, max_retries)
+                    await asyncio.sleep(wait)
+                    
+                except APIError as e:
+                    if attempt == max_retries - 1:
+                        logger.error("API error for issue #%s after all retries: %s", issue.number, e)
+                        degradation_tracker.add(issue.number, f"API 错误：{e}")
+                        break
+                    wait = 2 ** attempt
+                    logger.warning("API error, retrying in %ds (attempt %d/%d): %s", wait, attempt + 1, max_retries, e)
+                    await asyncio.sleep(wait)
+                    
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        logger.error("Unexpected error for issue #%s after all retries: %s", issue.number, e)
+                        degradation_tracker.add(issue.number, f"未知错误：{e}")
+                        break
+                    wait = 2 ** attempt
+                    logger.warning("Unexpected error, retrying in %ds (attempt %d/%d): %s", wait, attempt + 1, max_retries, e)
+                    await asyncio.sleep(wait)
 
             # 所有重试都失败，使用本地 fallback
             logger.info("Using local fallback for issue #%s", issue.number)
@@ -214,15 +258,30 @@ async def summarize_batch(
             cache.set(cache_key, summary, expire_in=CACHE_EXPIRE)
             return summary
 
-    try:
-        results = await asyncio.gather(
-            *[_summarize_single_issue(issue) for issue in issues]
-        )
-        logger.info("Successfully processed %d issues", len(results))
-        return results
-    except Exception as e:
-        logger.error("Batch processing failed: %s", e)
-        raise LLMSummaryError("Failed to process issue batch") from e
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+        console=console,
+    ) as progress:
+        task = progress.add_task("正在生成摘要...", total=len(issues))
+        try:
+            results = []
+            for issue in issues:
+                summary = await _summarize_single_issue(issue)
+                results.append(summary)
+                progress.update(task, advance=1)
+                
+            # 输出降级统计
+            degradation_summary = degradation_tracker.get_summary()
+            if degradation_summary:
+                console.print("\n[yellow]" + degradation_summary + "[/]")
+                
+            return results
+            
+        except Exception as e:
+            logger.error("Batch processing failed: %s", e)
+            raise LLMSummaryError("Failed to process issue batch") from e
 
 
 async def summarize_single(
