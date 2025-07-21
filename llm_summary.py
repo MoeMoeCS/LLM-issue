@@ -15,6 +15,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.console import Console
 
 from cache import Cache
+from cache_keys import get_summary_key
 from config import (
     OPENAI_BASE_URL,
     OPENAI_API_KEY,
@@ -168,7 +169,12 @@ async def summarize_batch(
     async def _summarize_single_issue(issue):
         """为单个 issue 生成摘要"""
         # 检查缓存
-        cache_key = _get_cache_key(issue)
+        cache_key = get_summary_key(
+            issue_number=issue.number,
+            issue_title=issue.title,
+            issue_body=issue.body,
+            updated_at=str(issue.updated_at),
+        )
         if not force_refresh:
             cached = cache.get(cache_key)
             if cached:

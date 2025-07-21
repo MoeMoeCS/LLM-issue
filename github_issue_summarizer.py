@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from cache_keys import get_github_issues_key
 from config import (
     DONE_KEYWORDS,
     NOISE_LABELS,
@@ -162,7 +163,7 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
     page = 1
 
     # 生成缓存键
-    cache_key = f"github_issues:{repo}:{token or 'no_token'}"
+    cache_key = get_github_issues_key(repo, token)
     cached_data = get_cache(cache_key)
     if cached_data:
         logger.info("Using cached issues data")
