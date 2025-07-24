@@ -5,6 +5,25 @@ GitHub Issue 速览器 CLI
 """
 from __future__ import annotations
 
+import os
+from dotenv import load_dotenv, set_key
+load_dotenv()
+
+# 交互式引导：自动检测关键环境变量
+missing = []
+if not os.getenv("GH_TOKEN"):
+    missing.append("GH_TOKEN")
+if not os.getenv("OPENAI_API_KEY"):
+    missing.append("OPENAI_API_KEY")
+if missing:
+    print(f"[提示] 检测到缺少关键环境变量: {', '.join(missing)}")
+    for var in missing:
+        value = input(f"请输入 {var}: ").strip()
+        if value:
+            set_key(".env", var, value)
+            os.environ[var] = value
+    print("[提示] 已写入 .env 文件，下次将自动加载。")
+
 import asyncio
 import json
 import re
@@ -153,22 +172,18 @@ async def _handle_github_response(
     
     return True, data
 
-async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
-    """抓取指定仓库的 open issues，自动停于 GitHub 上限"""
+async def fetch_issues(repo: str, token: str | None, max_issues: int) -> List[Issue]:
+    """抓取指定仓库的 open issues，自动停于 GitHub 上限或 max_issues"""
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-
     issues: List[Issue] = []
     page = 1
-
-    # 生成缓存键
     cache_key = get_github_issues_key(repo, token)
     cached_data = get_cache(cache_key)
     if cached_data:
         logger.info("Using cached issues data")
-        return [Issue(**issue_dict) for issue_dict in cached_data]
-
+        return [Issue(**issue_dict) for issue_dict in cached_data][:max_issues]
     async with httpx.AsyncClient(
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         timeout=30,
@@ -180,8 +195,7 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
             console=Console(stderr=True),
         ) as progress:
             task = progress.add_task("Fetching issues...", total=None)
-            
-            while len(issues) < MAX_ITEMS:
+            while len(issues) < min(MAX_ITEMS, max_issues):
                 for attempt in range(MAX_RETRIES):
                     try:
                         r = await client.get(
@@ -195,11 +209,9 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
                                 "page": page,
                             },
                         )
-                        
                         should_continue, data = await _handle_github_response(r, repo)
                         if not should_continue:
                             break
-                        
                         for item in data:
                             if "pull_request" in item:
                                 continue
@@ -221,19 +233,19 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
                             issue = classify_issue(issue)
                             if should_include(issue):
                                 issues.append(issue)
-                        
-                        # 检查是否需要限流
+                                if len(issues) >= max_issues:
+                                    break
+                        if len(issues) >= max_issues:
+                            break
                         remain = int(r.headers.get("x-ratelimit-remaining", 1))
                         reset_ts = int(r.headers.get("x-ratelimit-reset", 0))
                         if remain < 10 and reset_ts:
                             wait = max(reset_ts - int(datetime.now().timestamp()), 0) + 1
                             logger.warning("Rate limit low (%d remaining), sleeping %ds", remain, wait)
                             await asyncio.sleep(wait)
-                        
                         page += 1
                         progress.update(task, advance=PER_PAGE)
-                        break  # 成功获取数据，跳出重试循环
-                        
+                        break
                     except RateLimitError as e:
                         if attempt == MAX_RETRIES - 1:
                             logger.error("Rate limit exceeded and max retries reached")
@@ -241,26 +253,20 @@ async def fetch_issues(repo: str, token: str | None) -> List[Issue]:
                         wait = max(e.reset_time - int(datetime.now().timestamp()), 0) + 1
                         logger.warning("Rate limit exceeded, sleeping %ds (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
                         await asyncio.sleep(wait)
-                        
                     except (httpx.RequestError, httpx.HTTPError) as e:
                         if attempt == MAX_RETRIES - 1:
                             logger.error("Network error after %d retries: %s", MAX_RETRIES, e)
                             raise NetworkError(f"Failed to fetch issues: {e}")
-                        wait = 2 ** attempt  # 指数退避
+                        wait = 2 ** attempt
                         logger.warning("Network error, retrying in %ds (attempt %d/%d): %s", wait, attempt + 1, MAX_RETRIES, e)
                         await asyncio.sleep(wait)
                 else:
-                    # 所有重试都失败
                     logger.error("Failed to fetch issues after %d retries", MAX_RETRIES)
                     raise NetworkError("Failed to fetch issues after all retries")
-
     logger.info("Fetched %d issues after filtering", len(issues))
-    
-    # 缓存结果，设置 5 分钟过期时间
     issues_data = [issue.to_dict() for issue in issues]
     set_cache(cache_key, issues_data, expire_in=300)
-    
-    return issues
+    return issues[:max_issues]
 
 
 # ---------- 摘要 & 输出 ----------
@@ -331,18 +337,19 @@ app = typer.Typer(help="GitHub Issue 速览器（支持 LLM 摘要）")
 def main(
     repo: str = typer.Argument(..., help="owner/repo 格式"),
     token: str = typer.Option(None, envvar="GH_TOKEN", help="GitHub Token"),
+    max_issues: int = typer.Option(50, help="最多抓取多少个 open issue（默认50，建议100以内体验更快）")
 ) -> None:
     """主入口"""
-    asyncio.run(run(repo, token))
+    asyncio.run(run(repo, token, max_issues))
 
 
-async def run(repo: str, token: str | None) -> None:
+async def run(repo: str, token: str | None, max_issues: int) -> None:
     """异步主流程"""
     console = Console()
     
     try:
         with console.status("[bold green]正在抓取 Issues...") as status:
-            issues = await fetch_issues(repo, token)
+            issues = await fetch_issues(repo, token, max_issues)
             if not issues:
                 console.print("[yellow]⚠️ 未找到任何符合条件的 Issue[/]")
                 return
@@ -374,4 +381,4 @@ async def run(repo: str, token: str | None) -> None:
         sys.exit(1)
 
 if __name__ == "__main__":
-    app()
+    app() 
