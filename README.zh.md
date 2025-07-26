@@ -1,5 +1,9 @@
 # GitHub Issue 速览器
 
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![License](https://img.shields.io/github/license/你的用户名/你的仓库名)
+![Stars](https://img.shields.io/github/stars/你的用户名/你的仓库名?style=social)
+
 简体中文 | [English](README.md)
 
 一个用于抓取、筛选并自动摘要 GitHub Issue 的命令行工具，支持大模型（如 OpenAI）自动生成一句话摘要。
