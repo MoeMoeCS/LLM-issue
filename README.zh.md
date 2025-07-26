@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/github/license/你的用户名/你的仓库名)
-![Stars](https://img.shields.io/github/stars/你的用户名/你的仓库名?style=social)
+![Stars](https://img.shields.io/github/stars/MoeMoeCS/LLM-issue?style=social)
 
 简体中文 | [English](README.md)
 
